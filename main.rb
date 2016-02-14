@@ -12,6 +12,19 @@ class Point
     @y = y
   end
 
+  def ==(other)
+    return false if other.class != Point
+    @x == other.x && @y == other.y
+  end
+
+  def eql?(other)
+    self == other
+  end
+
+  def hash
+    @x ^ @y
+  end
+
 end
 
 module Tetris
@@ -19,7 +32,7 @@ module Tetris
 BLOCKSIZE = 20
 BLOCKWIDTH = 8
 BLOCKHEIGHT = 15
-WIDTH = BLOCKWIDTH * BLOCKSIZE
+WIDTH = BLOCKWIDTH * BLOCKSIZE + BLOCKSIZE * 5
 HEIGHT = BLOCKHEIGHT * BLOCKSIZE
 
 private
@@ -27,7 +40,7 @@ private
 class Board
 
   def initialize
-    @blocks = Set.new
+    @blocks = {}
     @type_data = {0 => {:shape => [Point.new(0, 0), # box
                                    Point.new(1, 0),
                                    Point.new(0, 1),
@@ -67,53 +80,44 @@ class Board
   end
 
   def draw
-    @blocks.each do |block|
+    @blocks.each do |key, block|
       block.draw
     end
     @moving_piece.draw
   end
 
   def move_piece_down
+    new_rows = 0
     hit_piece_or_wall = @moving_piece.move_down(@blocks)
     if hit_piece_or_wall
       @moving_piece.get_blocks.each do |block|
-        @blocks.add block
+        @blocks[Point.new(block.x, block.y)] = block
       end
       @moving_piece = Piece.new @type_data
       BLOCKHEIGHT.times do |row|
-        var = false
-        BLOCKWIDTH.times do |item|
-          @blocks.each do |block|
-            if block.x != item && block.y != row
-              puts block.x.inspect
-              var = true
-              break
-            end
-          end
-          break if var
-        end
-        if !var
-          puts
-          new_blocks = Set.new
-          @blocks.each do |block|
+        if self.has_full_row(row)
+          new_rows += 1
+          new_blocks = {}
+          @blocks.each do |key, block|
             if block.y < row
               block.y += 1
-              new_blocks.add block
+              new_blocks[Point.new(block.x, block.y)] = block
             elsif block.y > row
-              new_blocks.add block
+              new_blocks[Point.new(block.x, block.y)] = block
             end
           end
           @blocks = new_blocks
         end
       end
     end
+    new_rows
   end
 
   def turn_piece_left
     hit_piece_or_wall = @moving_piece.rotate_left(@blocks)
     if hit_piece_or_wall
       @moving_piece.get_blocks.each do |block|
-        @blocks.add block
+        @blocks[Point.new(block.x, block.y)] = block
       end
       @moving_piece = Piece.new @type_data
     end
@@ -123,7 +127,7 @@ class Board
     hit_piece_or_wall = @moving_piece.rotate_right(@blocks)
     if hit_piece_or_wall
       @moving_piece.get_blocks.each do |block|
-        @blocks.add block
+        @blocks[Point.new(block.x, block.y)] = block
       end
       @moving_piece = Piece.new @type_data
     end
@@ -133,7 +137,7 @@ class Board
     hit_piece_or_wall = @moving_piece.move_left(@blocks)
     if hit_piece_or_wall
       @moving_piece.get_blocks.each do |block|
-        @blocks.add block
+        @blocks[Point.new(block.x, block.y)] = block
       end
       @moving_piece = Piece.new @type_data
     end
@@ -143,10 +147,19 @@ class Board
     hit_piece_or_wall = @moving_piece.move_right(@blocks)
     if hit_piece_or_wall
       @moving_piece.get_blocks.each do |block|
-        @blocks.add block
+        @blocks[Point.new(block.x, block.y)] = block
       end
       @moving_piece = Piece.new @type_data
     end
+  end
+
+  def has_full_row(row)
+    BLOCKWIDTH.times do |x_pos|
+      if !@blocks.has_key?(Point.new(x_pos, row))
+        return false
+      end
+    end
+    true
   end
 
 end
@@ -215,7 +228,14 @@ class Piece
   end
 
   def move_left(pieces)
-    if @x > 0
+    v = true
+    @shape.each do |block|
+      if (block.x + @x) <= 0
+        v = false
+        break
+      end
+    end
+    if v
       @x -= 1
       @shape.each do |block|
         if block.touching?(@x, @y, pieces)
@@ -228,7 +248,14 @@ class Piece
   end
 
   def move_right(pieces)
-    if @x < BLOCKWIDTH - 2
+    v = true
+    @shape.each do |block|
+      if (block.x + @x) >= BLOCKWIDTH - 1
+        v = false
+        break
+      end
+    end
+    if v
       @x += 1
       @shape.each do |block|
         if block.touching?(@x, @y, pieces)
@@ -299,7 +326,7 @@ class PieceBlock
     if (@y + y) >= BLOCKHEIGHT
       return true
     end
-    blocks.each do |block|
+    blocks.each do |key, block|
       if (@x + x) == block.x && (@y + y) == block.y
         return true
       end
@@ -322,7 +349,7 @@ end
 
 class Block
 
-  attr_reader :x, :y
+  attr_accessor :x, :y
   
   def initialize(x, y, col)
     @x = x
@@ -344,11 +371,13 @@ class Screen < Gosu::Window
     super WIDTH, HEIGHT
     @board = Board.new
     @prev_time = Time.new
+    @score = 0
+    @speed = 0.5
   end
 
   def draw
-    (HEIGHT / 20).times do |y|
-      (WIDTH / 20).times do |x|
+    BLOCKHEIGHT.times do |y|
+      BLOCKWIDTH.times do |x|
         Gosu.draw_rect(x * BLOCKSIZE + 1, y * BLOCKSIZE + 1, BLOCKSIZE - 2, BLOCKSIZE - 2, 0xff_ccffff)
       end
     end
@@ -356,9 +385,13 @@ class Screen < Gosu::Window
   end
 
   def update
-    if Time.new - @prev_time >= 0.5 || Gosu::button_down?(Gosu::KbS) || Gosu::button_down?(Gosu::KbDown)
+    if Time.new - @prev_time >= @speed || Gosu::button_down?(Gosu::KbS) || Gosu::button_down?(Gosu::KbDown)
       @prev_time = Time.new
-      @board.move_piece_down
+      new_rows = @board.move_piece_down
+      new_rows.times do
+        @speed -= 0.01
+        @score += 1
+      end
     end
   end
 
